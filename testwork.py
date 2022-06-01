@@ -1,83 +1,57 @@
-from typing import List
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-
-app = FastAPI()
-
-html = """
-<!DOCTYPE html>
-<html>
-    <head>
-        <title>Test work</title>
-    </head>
-    <body>
-        <h1>Chating</h1>
-        <h2>Your ID: <span id="ws-id"></span></h2>
-        <form action="" onsubmit="sendMessage(event)">
-            <input type="text" id="messageText" autocomplete="off"/>
-            <button>Send</button>
-        </form>
-        <ul id='messages'>
-        </ul>
-        <script>
-            var client_id = Date.now()
-            document.querySelector("#ws-id").textContent = client_id;
-            var ws = new WebSocket(`ws://localhost:8000/ws/${client_id}`);
-            ws.onmessage = function(event) {
-                var messages = document.getElementById('messages')
-                var message = document.createElement('li')
-                var content = document.createTextNode(event.data)
-                message.appendChild(content)
-                messages.appendChild(message)
-            };
-            function sendMessage(event) {
-                var input = document.getElementById("messageText")
-                ws.send(input.value)
-                input.value = ''
-                event.preventDefault()
-            }
-        </script>
-    </body>
-</html>
-"""
-
-
-class ConnectionManager:
+# Ждём контроллера дальше понимаем что испарвлять и добавлять
+ 
+import rospy, sys
+import moveit_commander
+from control_msgs.msg import GripperCommand # На глаз, опять сыро, ждём контроллера 
+ 
+class MoveItFkDemo:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
-
-    async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            await connection.send_text(message)
-
-
-manager = ConnectionManager()
-
-
-@app.get("/")
-async def get():
-    return HTMLResponse(html)
-
-
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: int):
-    await manager.connect(websocket)
+        # Инициализировать API move_group
+        moveit_commander.roscpp_initialize(sys.argv)
+ 
+                 # Под вопросом зависит от контроллера
+        rospy.init_node('moveit_fk_demo', anonymous=True)
+ 
+                 # Создаём группу для движения 
+        arm = moveit_commander.MoveGroupCommander('arm')
+        
+                 # Создаём группу для захвата
+        gripper = moveit_commander.MoveGroupCommander('gripper')
+        
+                 # Ошибка манипулятора, допустимая
+        arm.set_goal_joint_tolerance(0.001)
+        gripper.set_goal_joint_tolerance(0.001)
+        
+                 # Исходное положение
+        arm.set_named_target('arm_init_pose')
+        arm.go()
+        rospy.sleep(2)
+         
+                 # Положение захвата
+        '''
+        gripper.set_joint_value_target([0.01])
+        gripper.go()
+        rospy.sleep(1)
+        '''
+                 # Положение руки в радианах ( под вопросом )
+        joint_positions = [1.5708,1.5708,1.5708,1.5708,1.5708,1.5708,1.5708]
+        result=arm.set_joint_value_target(joint_positions)
+        rospy.loginfo(str(result))
+                 
+                 # Управление рукой робота, чтобы завершить движение
+        arm.go()
+        joint=arm.get_current_joint_values()
+        print("final joint=",joint)
+        pose=arm.get_current_pose('link7')
+        print('pose=',pose)
+        rospy.sleep(1)
+        
+                 # Выход из управления
+        moveit_commander.roscpp_shutdown()
+        moveit_commander.os._exit(0)
+ 
+if __name__ == "__main__":
     try:
-        while True:
-            data = await websocket.receive_text()
-            await manager.send_personal_message(f"You wrote: {data}", websocket)
-            await manager.broadcast(f"Client #{client_id} says: {data}")
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        await manager.broadcast(f"Client #{client_id} left the chat")
+        MoveItFkDemo()
+    except rospy.ROSInterruptException:
